@@ -1,7 +1,7 @@
 # ==========================================================================
 # Main class for ctools integration into the Science Alert Generation system
 #
-# Copyright (C) 2018 Andrea Bulgarelli, Nicolò Parmiggiani
+# Copyright (C) 2018 Andrea Bulgarelli, Nicolò Parmiggiani, Simone Tampieri
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@ import os
 import shutil
 import gammalib
 import ctools
+import cscripts
 from lxml import etree
 import obsutils
 from GammaPipeCommon.Configuration import ObservationConfiguration
@@ -34,14 +35,10 @@ from math import ceil
 
 #import CTA3GHextractor_wrapper
 
-
-
-class DetectionAndMaps:
+class DetectionOnOff:
 	def __init__(self):
 		return
 
-	# TODO can we break the init() interface changing param?
-	#      can we put all information in a single configuration object?
 	def init(self, obsfilename, simfilename, analysisfilename, runconf, eventfilename):
 		self.obsfilename = obsfilename
 		self.simfilename = simfilename
@@ -57,7 +54,6 @@ class DetectionAndMaps:
 		if self.obsfilename:
 			self.obs = self.open_observation(self.obsfilename)
 
-		# TODO Can we stay without runconf?
 		if self.runconf:
 			if self.runconf.skyframeref == 'fk5':
 				print('pointing ra  ' + str(self.obsconf.point_ra) + ' dec ' + str(self.obsconf.point_dec) + ' frame ' + str(self.obsconf.point_frame))
@@ -141,41 +137,29 @@ class DetectionAndMaps:
 			exit(10)
 
 		############ Simulate events
+		# in on-off analysis we need a shift on observation DEC coord
 
 		if self.simfilename:
-
 			# Setup simulation model
-			if self.simfilename:
-				self.obs.models(gammalib.GModels(self.simfilename))
+			self.obs.models(gammalib.GModels(self.simfilename))
 
+			sim = ctools.ctobssim(self.obs)
+			sim['debug'] = debug
+			sim['seed']  = seed
 			if self.runconf.WorkInMemory == 0:
 				print('# Generate simulated event list on disk')
 				# Simulate events on disk
-				sim = ctools.ctobssim()
-				sim['inmodel'] = self.simfilename
 				sim['outevents'] = events_name
-				sim['caldb'] = 'prod2'
-				sim['irf'] = 'South_0.5h'
-				sim['ra'] = self.obsconf.roi_ra
-				sim['dec'] = self.obsconf.roi_dec
-				sim['rad'] = self.obsconf.roi_fov
-				sim['tmin'] = "MJD "+str(self.obsconf.tstart)
-				sim['tmax'] = "MJD "+str(self.obsconf.tstop)
-				sim['emin'] = self.obsconf.emin
-				sim['emax'] = self.obsconf.emax
-				sim['debug'] = debug
-				sim['seed']    = seed
 				sim.execute()
 				self.eventfilename = events_name
 
 			if self.runconf.WorkInMemory == 1:
 				print('# Generate simulated event list in memory')
 				# Simulate events on memory
-				sim = ctools.ctobssim(self.obs)
-				sim['debug'] = debug
-				sim['seed']    = seed
 				sim.run()
 
+			print("sim:", sim)
+			print(sim.obs())
 
 		#if self.runfilename is not present
 		#   import into DB if any
@@ -240,7 +224,6 @@ class DetectionAndMaps:
 				#events.load(events_name)
 				events.load(selected_events_name)
 
-
 		############ Select events
 
 		if self.runconf.WorkInMemory == 1:
@@ -249,22 +232,17 @@ class DetectionAndMaps:
 
 		#using file
 		if self.runconf.WorkInMemory == 0:
-			print('# Select event list from disk')
+			print('# Select event list from disk: ', events_name)
 			select = ctools.ctselect()
 			select['inobs']  = events_name
 			select['outobs'] = selected_events_name
+			select['logfile'] = "ctselect.log"
 
 		select['ra']     = self.runconf.roi_ra
 		select['dec']    = self.runconf.roi_dec
 		select['rad']    = self.runconf.roi_ringrad
 		select['tmin']   = 'MJD ' + str(self.runconf.tmin)
-		#select['tmin']   = 'INDEF'
-		#select['tmin'] = 0.0
-		#select['tmin'] = 'MJD 55197.0007660185'
-		#select['tmax']   = self.runconf.tmax
-		#select['tmax']   = 'INDEF'
 		select['tmax']   = 'MJD ' + str(self.runconf.tmax)
-		#select['tmax']   = 55197.0007660185 + self.runconf.tmax / 86400.
 		select['emin']   = self.runconf.emin
 		select['emax']   = self.runconf.emax
 
@@ -274,20 +252,12 @@ class DetectionAndMaps:
 		if self.runconf.WorkInMemory == 0:
 			select.execute()
 
-		print("after select events")
-		print(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])
+		print("after select events ", datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])
 
-		#print(self.runconf.roi_ra)
-		#print(self.runconf.roi_dec)
-		#print(self.obsconf.obs_fov)
-		#print(self.runconf.tmin)
-		#print(self.runconf.tmax)
-		#print(self.runconf.emin)
-		#print(self.runconf.emax)
-		#print(select.obs()[0])
 		print("select --")
 		print(select)
 		print("select --")
+		print(select.obs())
 
 		if self.runconf.WorkInMemory == 2:
 			print('# Load event list from disk')
@@ -307,6 +277,7 @@ class DetectionAndMaps:
 			print(self.obs[0])
 			print("obs 0 --")
 			localobs = self.obs
+			print("localobs:",localobs)
 
 		if self.runconf.WorkInMemory == 1:
 			print(select.obs())
@@ -314,84 +285,56 @@ class DetectionAndMaps:
 			localobs = select.obs()
 
 		for run in localobs:
-
 			print('run ---'+selected_events_name)
-			print("before ctbin")
 			print(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])
 
-			print(run)
+			print("Run: ",run)
 
 			# Create container with a single observation
 			container = gammalib.GObservations()
 			container.append(run)
 
-
-			if self.runconf.MakeCtsMap == 1:
-				cubefile_name 	     = 'cube.fits'
-				#event file in memory or read from fits file on memory
-				if self.runconf.WorkInMemory == 1:
-					bin = ctools.ctbin(container)
-
-				if self.runconf.WorkInMemory == 0:
-					#event file on disk
-					bin = ctools.ctbin()
-					bin['inobs']    = selected_events_name
-
-				#make binned map on disk
-				bin['outcube']  = cubefile_name
-
-				#common configs
-				bin['ebinalg']  = self.runconf.cts_ebinalg
-				bin['emin']     = self.runconf.emin
-				bin['emax']     = self.runconf.emax
-				bin['enumbins'] = self.runconf.cts_enumbins
-				bin['nxpix']    = ceil(self.runconf.roi_ringrad*2 / self.runconf.cts_binsz)
-				bin['nypix']    =  ceil(self.runconf.roi_ringrad*2 / self.runconf.cts_binsz)
-				bin['binsz']    = self.runconf.cts_binsz
-				bin['coordsys'] = self.runconf.cts_coordsys
-				bin['usepnt']   = self.runconf.cts_usepnt # Use pointing for map centre
-				bin['proj']     = self.runconf.cts_proj
-				bin['xref'] = self.runconf.roi_ra
-				bin['yref'] = self.runconf.roi_dec
-				print("-- bin")
-				print(bin)
-				#make binned map on disk
-				if self.runconf.WorkInMemory == 0:
-					bin.execute()
-					# Set observation ID if make binned map on disk
-					bin.obs()[0].id(cubefile_name)
-					bin.obs()[0].eventfile(cubefile_name)
-					os.system('mkdir -p ' + self.runconf.resdir)
-					shutil.copy('./cube.fits', self.runconf.resdir + '/'+self.runconf.runprefix + '_cube.fits')
-
-					if self.runconf.CtsMapToPng == 1:
-						title = 'OBS ' + str(self.obsconf.id) + ' / MJD ' + str(self.runconf.tmin) + ' - ' + 'MJD ' + str(self.runconf.tmax)
-						SkyImage.display(cubefile_name, "sky1.png", 2, title)
-						#SkyImage.dispalywithds9_cts1(cubefile_name, "sky2", 10)
-						#copy results
-						os.system('mkdir -p ' + self.runconf.resdir)
-						shutil.copy('./sky1.png', self.runconf.resdir + '/'+self.runconf.runprefix + '_sky1.png')
-
-				#make binned map on memory
-				if self.runconf.WorkInMemory == 1:
-					bin.run()
-
-				# Append result to observations
-				#localobs.extend(bin.obs())
-			print("after ctbin")
 			print(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])
-			#print(obs)
-			#print(obs[0])
 			print(str(self.obsconf.caldb))
+
+			# onoff analysis
+			# get RA and DEC from analysisfilename
+			xml_inmodel = etree.parse(self.analysisfilename)
+			xml_get_coord = etree.XPath("./source/spatialModel/parameter[@name=$name]")
+
+			phagen = cscripts.csphagen(select.obs())
+			phagen['ebinalg']   = self.runconf.onoff_ebinalg
+			phagen['emin']      = self.runconf.emin
+			phagen['emax']      = self.runconf.emax
+			phagen['rad']       = float(self.runconf.onoff_radius)
+			phagen['ra']        = float(xml_get_coord(xml_inmodel, name='RA')[0].attrib.get('value'))
+			phagen['dec']       = float(xml_get_coord(xml_inmodel, name='DEC')[0].attrib.get('value'))
+			phagen['enumbins']  = int(self.runconf.onoff_enumbins)
+			phagen['stack']     = False
+			phagen['bkgmethod'] = self.runconf.onoff_bkgmethod
+			phagen['coordsys']  = self.runconf.onoff_coordsys
+			phagen['caldb']     = str(self.obsconf.caldb)
+			phagen['irf']       = self.obsconf.irf
+			phagen['outobs']    = 'onoff_obs.xml'
+			phagen['prefix']    = 'csphagen'
+			phagen['logfile']   = 'csphagen.log'
+			if self.runconf.WorkInMemory == 0:
+				phagen.execute()
+			if self.runconf.WorkInMemory == 1:
+				phagen.run()
+			print(phagen)
+
+			pha_obs_container = phagen.obs()
+			print(pha_obs_container)
 
 			#hypothesis builders
 			#3GHextractor
 			# 3GH Extractor code
-			if self.runconf.HypothesisGenerator3GH and cubefile_name:
-				self.analysisfilename = CTA3GHextractor_wrapper.extract_source(cubefile_name)
-				print(self.analysisfilename)
-				#cv2.waitKey(0)
-				print('HypothesisGeneratorEG3')
+			# if self.runconf.HypothesisGenerator3GH and cubefile_name:
+			# 	self.analysisfilename = CTA3GHextractor_wrapper.extract_source(cubefile_name)
+			# 	print(self.analysisfilename)
+			# 	#cv2.waitKey(0)
+			# 	print('HypothesisGeneratorEG3')
 
 			#eseguire MLE
 			print('analysisfilename: ' + self.analysisfilename)
@@ -401,28 +344,30 @@ class DetectionAndMaps:
 
 				# Perform maximum likelihood fitting
 
-				if self.runconf.WorkInMemory == 1:
-					like = ctools.ctlike(select.obs())
+				# if self.runconf.WorkInMemory == 1:
+				# 	like = ctools.ctlike(select.obs())
 
-				if self.runconf.WorkInMemory == 0:
-					like = ctools.ctlike()
+				# if self.runconf.WorkInMemory == 0:
+				# 	like = ctools.ctlike()
 
-					if(self.runconf.binned == "1"):
-						like['inobs']  = cubefile_name
-						like['expcube'] = "NONE"
-						like['psfcube'] = "NONE"
-						like['edispcube'] = "NONE"
-						like['bkgcube'] = "NONE"
-						like['statistic'] = "CHI2"
+				# 	if(self.runconf.binned == "1"):
+				# 		like['inobs']  = cubefile_name
+				# 		like['expcube'] = "NONE"
+				# 		like['psfcube'] = "NONE"
+				# 		like['edispcube'] = "NONE"
+				# 		like['bkgcube'] = "NONE"
+				# 		like['statistic'] = "CHI2"
 
-					if(self.runconf.binned == "0"):
-						like['inobs']  = selected_events_name
-						like['statistic'] = "DEFAULT"
+				# 	if(self.runconf.binned == "0"):
+				# 		like['inobs']  = selected_events_name
+				# 		like['statistic'] = "DEFAULT"
 
-
+				# we need the csphagen output observation file as input
+				like = ctools.ctlike(phagen.obs())
+				like['inobs']    = phagen['outobs'].value()
 				like['inmodel']  = self.analysisfilename
-				like['outmodel']  = result_name
-				like['caldb'] = str(self.obsconf.caldb)
+				like['outmodel'] = result_name
+				like['caldb']    = str(self.obsconf.caldb)
 				like['irf']      = self.obsconf.irf
 
 				like.execute()
@@ -448,14 +393,14 @@ class DetectionAndMaps:
 				os.system('mkdir -p ' + self.runconf.resdir)
 				shutil.copy('./results.xml', self.runconf.resdir + '/'+self.runconf.runprefix + '_results.xml')
 
-				if self.runconf.deleterun == "1":
-					cmd = 'rm -r '+self.runconf.rundir
-					os.system(cmd)
+				# if self.runconf.deleterun == "1":
+				#	cmd = 'rm -r '+self.runconf.rundir
+				#	os.system(cmd)
 
-			if self.runconf.HypothesisGenerator3GH:
-				CTA3GHextractor_wrapper.print_graphs(self.simfilename, result_name, self.analysisfilename)
-				#cv2.destroyAllWindows()
-				print('HypothesisGeneratorEG3')
+			# if self.runconf.HypothesisGenerator3GH:
+			# 	CTA3GHextractor_wrapper.print_graphs(self.simfilename, result_name, self.analysisfilename)
+			# 	#cv2.destroyAllWindows()
+			# 	print('HypothesisGeneratorEG3')
 
 		# Return
 		return

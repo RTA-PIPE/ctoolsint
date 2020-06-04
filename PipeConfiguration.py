@@ -47,6 +47,22 @@ class CToolsRunConfiguration(RunConfiguration):
 		self.binned = self.info_dict['run']['Binned']['value']
 		self.deleterun = self.info_dict['run']['DeleteRun']['value']
 
+		#Onoff
+		self.onoff_analysis = int(self.info_dict['run'].get('ScienceToolReference', {}).get('onoff', '0'))
+		if self.onoff_analysis:
+			onoff_params = self.info_dict['run'].get('OnOff', {})
+
+			if not onoff_params:
+				print("Error: need a OnOff param tag in run config")
+				exit(1)
+
+			for param in ['ebinalg', 'enumbins', 'bkgmethod', 'coordsys', 'radius']:
+				if param in onoff_params:
+					setattr(self, 'onoff_'+param, onoff_params[param])
+				else:
+					print("Error: '%s' parameter is not in run config OnOff tag." % param)
+					exit(1)
+
 		point_to_center_of_observation = self.info_dict['run']['CountsMap']['usepnt']
 		if(point_to_center_of_observation == "yes"):
 			self.cts_usepnt = True
